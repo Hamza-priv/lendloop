@@ -39,3 +39,12 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# example env file is safe to commit
+!.env.example
+# local scratch
+*.tmp.mjs
+.clerk/
+
+# Local Convex backend data (holds env values)
+.convex/
