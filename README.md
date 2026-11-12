@@ -319,45 +319,45 @@ npm run build
 
 ## Security and data-minimisation decisions
 
-My rule of thumb: every check that matters runs on the server, and every piece of data goes only where it's needed.
+Two rules guided everything: **check every rule on the server**, and **send each part of the system only the data it needs**.
 
-**Access control lives in Convex, not the UI.**
-- Every query and mutation looks up the signed-in user from the Clerk token and checks the rule in `convex/domain/permissions.ts` before touching data: only the owner edits or deletes a listing, only the lender approves, declines or marks returned, only the borrower cancels, nobody borrows their own tool.
-- The UI (`RequireUser`, `proxy.ts`) only hides buttons and redirects; calling a Convex function directly gets the same answer as clicking. The permission tests call functions as the wrong user to prove it.
-- The admin role is never taken from the client. It comes from the `ADMIN_EMAILS` server variable and is re-applied on every sign-in, so it can't be granted by editing a request.
+**1. Rules are checked on the server, not just in the UI**
+- Every Convex function first finds out who is calling (from the Clerk sign-in), then checks the rule in `convex/domain/permissions.ts`. For example: only the owner can edit a listing, only the lender can approve, only the borrower can cancel, and nobody can borrow their own tool.
+- The UI only hides buttons. Calling a function directly gives the same answer as clicking. The tests prove this by calling functions as the wrong user.
+- The admin role comes from the `ADMIN_EMAILS` setting on the server. The browser can't grant it.
 
-**Each screen and integration gets only the data it needs.**
-- The public landing page gets tool `_id`, `name` and `category`. No owners, no descriptions, no photos, no locations.
-- Signed-in pages get the owner's display name and Trusted Lender flag. Emails reach a browser only on the Admin page's Users tab, so admins can identify accounts; regular users never see another user's email.
-- n8n notification payloads carry the event type, loan id, status and dates, the tool name and the recipient's name and email: exactly what the message needs. The overdue endpoint returns the same small set.
-- The AI assistant's tools return the same fields as the Browse page plus the user's own activity. It has no tool that reads emails, coordinates or other users' chats, and tests check that.
-- "Near me" works out distances in the browser; the user's position is never sent to the server.
-- Tool locations are opt-in, rounded to about a metre, and the form suggests a corner or gate rather than a front door.
+**2. Each part gets only the data it needs**
+- The public page gets only each tool's name and category.
+- Signed-in users see an owner's name and Trusted Lender badge, never their email. Only admins see emails, on the Users tab.
+- n8n gets only what a message needs: the event, the loan dates, the tool name, and the recipient's name and email.
+- The AI assistant can only read what the Browse page shows, plus the user's own activity. It can't see emails, locations or other people's chats.
+- "Near me" works out distances in the browser. The user's location is never sent to the server.
+- Pickup locations are optional, and the form suggests a nearby corner or gate instead of a front door.
 
-**The Convex ↔ n8n integration is authenticated in both directions.**
-- Every webhook call is signed with HMAC-SHA256 over `timestamp.rawBody`. The receiver recomputes it over the raw bytes, compares in constant time, and rejects anything older than 5 minutes, which stops replays.
-- Each direction has its own secret (`WEBHOOK_SECRET_TO_N8N`, `WEBHOOK_SECRET_FROM_N8N`), so a leak on one side doesn't let an attacker forge the other.
-- Secrets live only in environment variables (Convex env and the n8n container env). The exported workflow JSON contains none; I checked it before committing.
+**3. Convex and n8n check each other**
+- Every webhook call is signed (HMAC-SHA256). The receiver checks the signature and rejects requests older than 5 minutes, so an old request can't be replayed.
+- Each direction has its own secret. If one leaks, the other direction is still safe.
+- Secrets live only in environment variables. The exported n8n workflows contain none.
 
-**Retries can't create duplicates.**
-- Loan events go through a transactional outbox: the loan change and its event are saved in one mutation, then delivered with retries and backoff. Delivery is at least once, so n8n remembers recent event ids and skips repeats.
-- Reminder write-backs carry an idempotency key (`loanId:date`), stored once; a retried write returns `{"created": false}`.
-- Failures are visible, never silent: rows that run out of retries and errors reported by the n8n error workflow appear on the Admin page with a Retry button.
+**4. Retries never create duplicates, and failures are never silent**
+- A loan change and its notification are saved together in one step (an "outbox"), then sent to n8n with retries. n8n remembers recent events and skips repeats.
+- Reminders are saved with a unique key (`loanId:date`), so a retried save doesn't create a second reminder.
+- Anything that keeps failing shows up on the Admin page, with a Retry button.
 
-**Input is validated on the server, and abuse is capped.**
-- Lengths for names, descriptions, messages and requests; date ranges of at most 30 days, starting at most 90 days ahead; photos checked again on the server for type (JPG/PNG/WebP/GIF), size (5 MB) and count (4).
-- Rate limits where a person or a bill could be flooded: 30 messages per conversation per 10 minutes, 20 assistant questions per hour, 5 open Wanted requests.
-- Message emails are sent once per unread conversation, not per message.
+**5. Input is checked and abuse is limited**
+- The server checks text lengths, dates (loans up to 30 days, starting at most 90 days ahead), and photos (JPG/PNG/WebP/GIF, 5 MB, up to 4).
+- Limits stop flooding: 30 messages per chat every 10 minutes, 20 assistant questions per hour, 5 open Wanted requests per person.
+- Message emails go out once per unread chat, not once per message.
 
-**Safety in the AI assistant.**
-- Messages about suicide, self-harm or hurting someone are caught by a server-side check before any AI model sees them, and get a fixed, human-written reply with emergency numbers and helplines. The model's instructions cover subtler wording, and I tested both paths against the live model.
-- Text written by other users (tool names, descriptions) is passed to the model as data with an instruction never to follow it, and the assistant can only read, never change anything.
+**6. The AI assistant is safe by design**
+- Messages about suicide, self-harm or hurting someone are caught on the server before the AI sees them. They get a fixed reply with emergency numbers and helplines. I tested this with the live AI too.
+- The assistant treats other users' text (tool names and descriptions) as information, never as instructions. It can only read; it can't change anything.
 
-**Keeping history without keeping clutter.**
-- Deleting a listing is a soft delete, so past loans still show the tool name; pending requests for it are declined and each borrower is notified.
-- Removed photos are deleted from storage straight away, and a daily job removes uploads that never ended up on a listing.
+**7. Keeping history, not clutter**
+- Deleting a listing hides it but keeps past loans readable. Pending requests for it are declined, and each borrower is told.
+- Deleted photos are removed from storage. A daily job removes uploads that were never used.
 
-**Trade-offs I'd revisit** are in [PRODUCTION.md](PRODUCTION.md).
+What I'd still change is in [PRODUCTION.md](PRODUCTION.md).
 
 ---
 

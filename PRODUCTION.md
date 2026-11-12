@@ -1,29 +1,29 @@
-# What I would change to run this in production
+# What I would change for production
 
-The app is built to be correct and safe at small scale. Before real neighbours used it, I'd change these, roughly in this order.
+The app works well at small scale. Before real neighbours used it, I'd make these changes, most important first.
 
-## 1. Real delivery, hosted properly
-- **Send real emails.** Swap the n8n "logged mock" node for an email provider node (Postmark, SES). The payload stays as small as it is now.
-- **Host n8n behind HTTPS** (or use n8n Cloud), turn `N8N_SECURE_COOKIE` back on, and move n8n from SQLite to Postgres.
-- **Keep secrets in n8n credentials** instead of letting Code nodes read environment variables (`N8N_BLOCK_ENV_ACCESS_IN_NODE` is off today for local simplicity).
-- **Use the Convex cloud deployment** and expose the webhook on a long, non-guessable path in addition to the signature check.
+## 1. Real emails and proper hosting
+- **Send real emails.** Replace n8n's "logged mock" step with an email service (like Postmark or Amazon SES). The data sent stays the same.
+- **Run n8n over HTTPS** (or use n8n Cloud), turn its secure cookies back on, and use Postgres instead of SQLite.
+- **Store secrets in n8n's credential store** instead of reading environment variables in code steps (that's switched on now only to keep local setup simple).
+- **Use a hosted Convex deployment**, and put the webhook on a hard-to-guess URL as well as checking the signature.
 
-## 2. Reliability at higher volume
-- n8n remembers the last 500 event ids in workflow static data to skip repeats. At scale, store processed ids in a real table with a TTL.
-- If event volume grows, put a managed queue (SQS, RabbitMQ) between the outbox and n8n, keeping the outbox table as the source of truth.
-- **Monitoring and alerts:** page someone when outbox rows fail or stay pending for more than a few minutes, or when the n8n error workflow fires.
+## 2. Handling more traffic
+- n8n remembers the last 500 events to skip repeats. With more traffic, keep that list in a proper database table instead.
+- If traffic grows a lot, add a queue (like SQS or RabbitMQ) between Convex and n8n. The outbox table stays the source of truth.
+- **Alerts:** tell someone when notifications keep failing, wait too long, or the n8n error workflow runs.
 
-## 3. Security and privacy hardening
-- **Secret rotation:** accept two signing secrets during a rotation window so keys can change without downtime.
-- **Tool locations:** with open sign-up, show only an approximate area (a ~500 m circle) until a request is approved.
-- **Admin roles in the app**, with an audit log of every admin action, instead of an env variable.
-- **Retention:** delete delivered outbox rows, reminders, read notifications and old chats after a set period.
-- **Rate limits on every mutation and the n8n endpoints**, not only on messages, the assistant and Wanted posts.
-- **Clerk:** replace the deprecated `createRouteMatcher` in `proxy.ts` with checks in each page, and keep Clerk's bot protection on in production.
-- **AI assistant:** use a paid model tier, so conversations aren't used for training, and add a monitored eval of crisis and privacy prompts that runs before each prompt change.
+## 3. Stronger security and privacy
+- **Changing secrets safely:** accept both the old and new signing secret for a short time, so secrets can change with no downtime.
+- **Pickup locations:** show only a rough area (about 500 m) until a request is approved.
+- **Admins managed in the app**, with a log of every admin action, instead of an environment setting.
+- **Delete old data:** remove sent notifications, old reminders and old chats after a set time.
+- **Rate limits everywhere**, not only on messages, the assistant and Wanted posts.
+- **Clerk:** replace the old `createRouteMatcher` in `proxy.ts` with checks in each page, and keep Clerk's bot protection on.
+- **AI assistant:** use a paid AI plan so chats aren't used for training, and run a set of crisis and privacy test questions before every change to its instructions.
 
 ## 4. Product and operations
-- **Timezones:** dates are UTC today. Store each user's timezone so "overdue" and the 09:00 reminder match their local day.
-- **Maps:** the public OpenStreetMap tile server and Nominatim are for light use only; switch to a hosted provider (MapTiler, Stadia) with a one-line URL change.
-- **Moderation:** let users report a listing or a message, and show reports on the Admin page.
-- **CI/CD:** run typecheck, lint, tests and the build on every push, with preview deployments per pull request.
+- **Timezones:** dates are in UTC today. Save each user's timezone so "overdue" and the 9 am reminder match their local day.
+- **Maps:** the free OpenStreetMap servers are only for light use. Switch to a paid map provider (like MapTiler); it's a one-line change.
+- **Reporting:** let people report a listing or a message, and show reports to admins.
+- **Automatic checks:** run type checks, lint, tests and a build on every push, with a preview site for each change.
