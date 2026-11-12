@@ -1,0 +1,98 @@
+{
+  "id": "LLerrors00000001",
+  "name": "LendLoop - Error handler",
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true
+  },
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "89f6ccd2-668d-4cae-99b2-d3f2b1ea41e6",
+      "name": "When a LendLoop workflow fails",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Signs a JSON body for Convex: HMAC-SHA256 over \"<timestamp>.<body>\".\nconst crypto = require('crypto');\nfunction signed(payload) {\n  const body = JSON.stringify(payload);\n  const timestamp = Math.floor(Date.now() / 1000).toString();\n  const signature = 'sha256=' + crypto\n    .createHmac('sha256', $env.LENDLOOP_SECRET_TO_CONVEX)\n    .update(timestamp + '.' + body)\n    .digest('hex');\n  return { body, timestamp, signature };\n}\n// Runs when another LendLoop workflow fails (after its retries).\n// Logs the failure and reports it to Convex so admins see it in the app.\nconst e = $input.first().json;\nconst report = {\n  workflow: (e.workflow && e.workflow.name) || 'unknown workflow',\n  node: e.execution && e.execution.lastNodeExecuted,\n  message: (e.execution && e.execution.error && e.execution.error.message) || 'unknown error',\n  executionId: e.execution && e.execution.id ? String(e.execution.id) : undefined,\n};\nconsole.error('[LendLoop error]', JSON.stringify(report));\nreturn [{ json: signed(report) }];"
+      },
+      "id": "ae0e7bc6-19d2-4be6-a338-69a7bc5deee4",
+      "name": "Log and sign report",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.LENDLOOP_CONVEX_SITE_URL }}/n8n/errors",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-lendloop-timestamp",
+              "value": "={{ $json.timestamp }}"
+            },
+            {
+              "name": "x-lendloop-signature",
+              "value": "={{ $json.signature }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ $json.body }}",
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "id": "31aa4276-9aa2-4557-88f8-2730f27ef5ef",
+      "name": "Report to Convex",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        440,
+        300
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
+    }
+  ],
+  "connections": {
+    "When a LendLoop workflow fails": {
+      "main": [
+        [
+          {
+            "node": "Log and sign report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log and sign report": {
+      "main": [
+        [
+          {
+            "node": "Report to Convex",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {}
+}

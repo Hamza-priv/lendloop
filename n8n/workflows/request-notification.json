@@ -1,0 +1,298 @@
+{
+  "id": "LLnotify00000001",
+  "name": "LendLoop - Loan event notifications",
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "errorWorkflow": "LLerrors00000001",
+    "saveManualExecutions": true
+  },
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "lendloop-loan-events",
+        "responseMode": "responseNode",
+        "options": {
+          "rawBody": true
+        }
+      },
+      "id": "1016045d-33e7-4d56-8526-79c5b45b23a6",
+      "name": "Loan event webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        300
+      ],
+      "webhookId": "6c1f1a7e-1d0b-4c33-9a43-6f0d6c7b2a01"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Verifies the HMAC signature Convex put on the raw request body.\n// Secret comes from the environment, never from this workflow.\nconst crypto = require('crypto');\nconst MAX_SKEW_SECONDS = 300;\nconst item = $input.first();\nconst headers = item.json.headers || {};\nconst timestamp = headers['x-lendloop-timestamp'];\nconst signature = headers['x-lendloop-signature'] || '';\n\nconst raw = item.binary && item.binary.data\n  ? (await this.helpers.getBinaryDataBuffer(0, 'data')).toString('utf8')\n  : '';\n\nfunction reject(reason) {\n  return [{ json: { valid: false, reason } }];\n}\nif (!raw) return reject('missing raw body');\nif (!timestamp || !signature) return reject('missing signature headers');\nif (Math.abs(Date.now() / 1000 - Number(timestamp)) > MAX_SKEW_SECONDS) return reject('stale timestamp');\n\nconst expected = 'sha256=' + crypto\n  .createHmac('sha256', $env.LENDLOOP_SECRET_FROM_CONVEX)\n  .update(timestamp + '.' + raw)\n  .digest('hex');\nconst a = Buffer.from(expected);\nconst b = Buffer.from(signature);\nif (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return reject('bad signature');\n\nconst event = JSON.parse(raw);\n// Keep only the fields the notification needs.\nreturn [{ json: {\n  valid: true,\n  eventId: event.eventId,\n  type: event.type,\n  loan: event.loan,\n  tool: event.tool,\n  recipient: event.recipient,\n  message: event.message, // message.received only\n  link: event.link,       // message.received / tool.available / wanted.match\n  wanted: event.wanted,   // wanted.match only\n} }];"
+      },
+      "id": "65c9c9c5-02e9-4615-be3d-d47291801a9c",
+      "name": "Verify signature",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "9ae904cd-4d38-4aad-88a7-523681583076",
+              "leftValue": "={{ $json.valid }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "356f82a4-f6b5-4a2a-baf4-46f19ec9e37f",
+      "name": "Signature valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        440,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Convex delivers at least once, so the same event can arrive twice\n// (e.g. n8n answered but the response was lost). Skip events already handled.\nconst seen = $getWorkflowStaticData('global');\nseen.eventIds = seen.eventIds || [];\nconst item = $input.first().json;\nreturn [{ json: { ...item, duplicate: seen.eventIds.includes(item.eventId) } }];"
+      },
+      "id": "a2e3644e-cc3e-4488-b500-e0122bf477a7",
+      "name": "Already handled?",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        660,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "29fbca02-8dd5-4d56-8a64-43fcce223752",
+              "leftValue": "={{ $json.duplicate }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "24bdafef-00e3-4843-a328-7abaee79cd5a",
+      "name": "Duplicate?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        880,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Mock notification channel: writes the email to the n8n log.\n// Swap this node for Email / Slack / Discord without changing anything else.\nconst e = $input.first().json;\nconst APP = 'http://localhost:3000';\nconst MESSAGES = {\n  'loan.requested': () => `${e.recipient.name}, someone asked to borrow your ${e.tool.name} (${e.loan.startDate} to ${e.loan.endDate}).`,\n  'loan.approved': () => `${e.recipient.name}, your request for the ${e.tool.name} was approved. Pick-up from ${e.loan.startDate}.`,\n  'loan.declined': () => `${e.recipient.name}, your request for the ${e.tool.name} was declined.`,\n  'loan.cancelled': () => `${e.recipient.name}, a request for your ${e.tool.name} was cancelled.`,\n  'loan.returned': () => `${e.recipient.name}, the ${e.tool.name} loan is marked returned. Thanks!`,\n  'message.received': () => `${e.recipient.name}, ${e.message.from} sent you a message about the ${e.tool.name}: \"${e.message.preview}\" Reply: ${APP}${e.link}`,\n  'wanted.match': () => `${e.recipient.name}, someone just listed a ${e.tool.name}, which may match your request \"${e.wanted.title}\". Take a look: ${APP}${e.link}`,\n  'tool.available': () => `${e.recipient.name}, the ${e.tool.name} you were waiting for is available again. Request it: ${APP}${e.link}`,\n};\nconst message = MESSAGES[e.type] ? MESSAGES[e.type]() : `Update on the ${e.tool.name}: ${e.type}`;\nconsole.log(`[LendLoop notify] to=${e.recipient.email} event=${e.eventId} ${message}`);\nreturn [{ json: { eventId: e.eventId, channel: 'mock-log', delivered: true } }];"
+      },
+      "id": "9295475d-58a9-4b51-b0a5-7d1c8bfb10cb",
+      "name": "Send notification (mock)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1100,
+        280
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Record the event only after the notification succeeded, so a failure is retried.\nconst seen = $getWorkflowStaticData('global');\nseen.eventIds = [...(seen.eventIds || []), $input.first().json.eventId].slice(-500);\nreturn $input.all();"
+      },
+      "id": "2e305f63-8290-4bde-a34b-7a4d5d57edbf",
+      "name": "Remember event",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1320,
+        280
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { \"received\": true, \"eventId\": $json.eventId } }}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "id": "1ca80dec-26b6-4f1e-b374-3c09f970d60d",
+      "name": "Respond 200",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        1540,
+        280
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { \"received\": true, \"duplicate\": true } }}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "id": "4cf9d2ab-ecde-4648-b0cb-2b8e9b42b4df",
+      "name": "Respond 200 duplicate",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        1100,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { \"error\": \"invalid signature\" } }}",
+        "options": {
+          "responseCode": 401
+        }
+      },
+      "id": "459d4ecb-2f07-4798-b30c-9a59aea4ce39",
+      "name": "Respond 401",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        660,
+        420
+      ]
+    }
+  ],
+  "connections": {
+    "Loan event webhook": {
+      "main": [
+        [
+          {
+            "node": "Verify signature",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Verify signature": {
+      "main": [
+        [
+          {
+            "node": "Signature valid?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Signature valid?": {
+      "main": [
+        [
+          {
+            "node": "Already handled?",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond 401",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Already handled?": {
+      "main": [
+        [
+          {
+            "node": "Duplicate?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Duplicate?": {
+      "main": [
+        [
+          {
+            "node": "Respond 200 duplicate",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Send notification (mock)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send notification (mock)": {
+      "main": [
+        [
+          {
+            "node": "Remember event",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Remember event": {
+      "main": [
+        [
+          {
+            "node": "Respond 200",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {}
+}

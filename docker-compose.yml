@@ -1,0 +1,31 @@
+# Self-hosted n8n for LendLoop. Values come from the gitignored `.env` file next to
+# this one (copy `.env.example`). No secret is written in this file.
+services:
+  n8n:
+    image: n8nio/n8n:${N8N_VERSION:-2.47.4}
+    restart: unless-stopped
+    ports:
+      - "5678:5678"
+    environment:
+      N8N_ENCRYPTION_KEY: ${N8N_ENCRYPTION_KEY:?set N8N_ENCRYPTION_KEY in .env}
+      GENERIC_TIMEZONE: UTC
+      TZ: UTC
+      N8N_SECURE_COOKIE: "false" # local http only; remove behind HTTPS
+      N8N_DIAGNOSTICS_ENABLED: "false"
+      N8N_PERSONALIZATION_ENABLED: "false"
+      # Mock notifications are console.log lines; this sends them to `docker compose logs`.
+      CODE_ENABLE_STDOUT: "true"
+      # Workflows read these with $env; they never appear in exported workflow JSON.
+      N8N_BLOCK_ENV_ACCESS_IN_NODE: "false"
+      NODE_FUNCTION_ALLOW_BUILTIN: crypto
+      LENDLOOP_CONVEX_SITE_URL: ${LENDLOOP_CONVEX_SITE_URL:-http://host.docker.internal:3211}
+      LENDLOOP_SECRET_FROM_CONVEX: ${WEBHOOK_SECRET_TO_N8N:?set WEBHOOK_SECRET_TO_N8N in .env}
+      LENDLOOP_SECRET_TO_CONVEX: ${WEBHOOK_SECRET_FROM_N8N:?set WEBHOOK_SECRET_FROM_N8N in .env}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - n8n_data:/home/node/.n8n
+      - ./n8n/workflows:/workflows:ro
+
+volumes:
+  n8n_data:
